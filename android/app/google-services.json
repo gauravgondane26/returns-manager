@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "585565534433",
+    "project_id": "returns-manager-dev-ecfd6",
+    "storage_bucket": "returns-manager-dev-ecfd6.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:585565534433:android:abef46f1476abaab585fa0",
+        "android_client_info": {
+          "package_name": "com.sb.returnsmanager"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyD2XZd81tmHwdP-hd_QazSd8mziUfs81wI"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
