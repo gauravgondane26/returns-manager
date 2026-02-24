@@ -6,6 +6,7 @@ import 'package:google_sign_in/google_sign_in.dart';
 import 'package:table_calendar/table_calendar.dart';
 
 import 'firebase_options.dart';
+import 'gmail/gmail_sync_service.dart';
 import 'items/application/items_providers.dart';
 import 'items/domain/item_enums.dart';
 import 'items/domain/return_item.dart';
@@ -157,6 +158,7 @@ class AppShell extends StatefulWidget {
 
 class _AppShellState extends State<AppShell> {
   int _currentTabIndex = 0;
+  bool _isSyncingGmail = false;
 
   Future<void> _signOut() async {
     await GoogleSignIn().signOut();
@@ -175,6 +177,45 @@ class _AppShellState extends State<AppShell> {
     ).push(MaterialPageRoute<void>(builder: (_) => ItemEditorPage(item: item)));
   }
 
+  Future<void> _syncGmail() async {
+    if (_isSyncingGmail) {
+      return;
+    }
+
+    setState(() {
+      _isSyncingGmail = true;
+    });
+
+    try {
+      final result = await GmailSyncService().syncDeliveries();
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Gmail sync done: ${result.upserts} upsert(s), '
+            '${result.candidatesFound} candidate(s), '
+            '${result.fetchedMessages} fetched.',
+          ),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Gmail sync failed: $error')));
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isSyncingGmail = false;
+        });
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final tabTitles = ['Home', 'Calendar', 'Decided'];
@@ -184,6 +225,17 @@ class _AppShellState extends State<AppShell> {
       appBar: AppBar(
         title: Text(tabTitles[_currentTabIndex]),
         actions: [
+          IconButton(
+            tooltip: 'Sync Gmail deliveries',
+            onPressed: _isSyncingGmail ? null : _syncGmail,
+            icon: _isSyncingGmail
+                ? const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.sync),
+          ),
           TextButton(onPressed: _signOut, child: const Text('Sign out')),
         ],
       ),
