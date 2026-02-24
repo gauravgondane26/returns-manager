@@ -40,12 +40,11 @@ class AuthGate extends StatelessWidget {
           );
         }
 
-        final user = snapshot.data;
-        if (user == null) {
+        if (snapshot.data == null) {
           return const SignInPage();
         }
 
-        return HomePage(user: user);
+        return const AppShell();
       },
     );
   }
@@ -144,10 +143,15 @@ class _SignInPageState extends State<SignInPage> {
   }
 }
 
-class HomePage extends StatelessWidget {
-  const HomePage({required this.user, super.key});
+class AppShell extends StatefulWidget {
+  const AppShell({super.key});
 
-  final User user;
+  @override
+  State<AppShell> createState() => _AppShellState();
+}
+
+class _AppShellState extends State<AppShell> {
+  int _currentTabIndex = 0;
 
   Future<void> _signOut() async {
     await GoogleSignIn().signOut();
@@ -156,17 +160,153 @@ class HomePage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final tabTitles = ['Home', 'Calendar', 'Decided'];
+
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Returns Manager'),
+        title: Text(tabTitles[_currentTabIndex]),
         actions: [
           TextButton(onPressed: _signOut, child: const Text('Sign out')),
         ],
       ),
-      body: Center(
-        child: Text(
-          'Signed in as ${user.email ?? user.uid}',
-          textAlign: TextAlign.center,
+      body: IndexedStack(
+        index: _currentTabIndex,
+        children: const [HomeTabView(), CalendarTabView(), DecidedTabView()],
+      ),
+      bottomNavigationBar: NavigationBar(
+        selectedIndex: _currentTabIndex,
+        onDestinationSelected: (value) {
+          setState(() {
+            _currentTabIndex = value;
+          });
+        },
+        destinations: const [
+          NavigationDestination(
+            icon: Icon(Icons.home_outlined),
+            selectedIcon: Icon(Icons.home),
+            label: 'Home',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.calendar_month_outlined),
+            selectedIcon: Icon(Icons.calendar_month),
+            label: 'Calendar',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.inventory_2_outlined),
+            selectedIcon: Icon(Icons.inventory_2),
+            label: 'Decided',
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class HomeTabView extends StatelessWidget {
+  const HomeTabView({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return const EmptyState(
+      icon: Icons.shopping_bag_outlined,
+      title: 'No items yet',
+      subtitle: 'Tracked items will appear here.',
+    );
+  }
+}
+
+class CalendarTabView extends StatelessWidget {
+  const CalendarTabView({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return const EmptyState(
+      icon: Icons.event_note_outlined,
+      title: 'No calendar entries',
+      subtitle: 'Upcoming return deadlines will appear here.',
+    );
+  }
+}
+
+class DecidedTabView extends StatelessWidget {
+  const DecidedTabView({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return DefaultTabController(
+      length: 3,
+      child: Column(
+        children: const [
+          TabBar(
+            tabs: [
+              Tab(text: 'Keeps'),
+              Tab(text: 'Returns'),
+              Tab(text: 'Expired'),
+            ],
+          ),
+          Expanded(
+            child: TabBarView(
+              children: [
+                EmptyState(
+                  icon: Icons.favorite_border,
+                  title: 'No kept items',
+                  subtitle: 'Items marked to keep will appear here.',
+                ),
+                EmptyState(
+                  icon: Icons.assignment_return_outlined,
+                  title: 'No return items',
+                  subtitle: 'Items marked for return will appear here.',
+                ),
+                EmptyState(
+                  icon: Icons.hourglass_disabled_outlined,
+                  title: 'No expired items',
+                  subtitle: 'Expired return windows will appear here.',
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class EmptyState extends StatelessWidget {
+  const EmptyState({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    super.key,
+  });
+
+  final IconData icon;
+  final String title;
+  final String subtitle;
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 36, color: Theme.of(context).colorScheme.primary),
+            const SizedBox(height: 12),
+            Text(
+              title,
+              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 6),
+            Text(
+              subtitle,
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ],
         ),
       ),
     );
