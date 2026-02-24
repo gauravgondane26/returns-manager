@@ -1,14 +1,19 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_sign_in/google_sign_in.dart';
+import 'package:table_calendar/table_calendar.dart';
 
 import 'firebase_options.dart';
+import 'items/application/items_providers.dart';
+import 'items/domain/item_enums.dart';
+import 'items/domain/return_item.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
-  runApp(const ReturnsManagerApp());
+  runApp(const ProviderScope(child: ReturnsManagerApp()));
 }
 
 class ReturnsManagerApp extends StatelessWidget {
@@ -161,6 +166,7 @@ class _AppShellState extends State<AppShell> {
   @override
   Widget build(BuildContext context) {
     final tabTitles = ['Home', 'Calendar', 'Decided'];
+    final user = FirebaseAuth.instance.currentUser;
 
     return Scaffold(
       appBar: AppBar(
@@ -169,9 +175,29 @@ class _AppShellState extends State<AppShell> {
           TextButton(onPressed: _signOut, child: const Text('Sign out')),
         ],
       ),
-      body: IndexedStack(
-        index: _currentTabIndex,
-        children: const [HomeTabView(), CalendarTabView(), DecidedTabView()],
+      body: Column(
+        children: [
+          Expanded(
+            child: IndexedStack(
+              index: _currentTabIndex,
+              children: const [
+                HomeTabView(),
+                CalendarTabView(),
+                DecidedTabView(),
+              ],
+            ),
+          ),
+          if (user?.email != null)
+            Padding(
+              padding: const EdgeInsets.only(left: 16, right: 16, bottom: 12),
+              child: Text(
+                'Signed in as ${user!.email}',
+                style: TextStyle(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ),
+        ],
       ),
       bottomNavigationBar: NavigationBar(
         selectedIndex: _currentTabIndex,
@@ -202,28 +228,178 @@ class _AppShellState extends State<AppShell> {
   }
 }
 
-class HomeTabView extends StatelessWidget {
+class HomeTabView extends ConsumerWidget {
   const HomeTabView({super.key});
 
   @override
-  Widget build(BuildContext context) {
-    return const EmptyState(
-      icon: Icons.shopping_bag_outlined,
-      title: 'No items yet',
-      subtitle: 'Tracked items will appear here.',
+  Widget build(BuildContext context, WidgetRef ref) {
+    final itemsAsync = ref.watch(homeItemsProvider);
+    return ItemsAsyncList(
+      itemsAsync: itemsAsync,
+      emptyIcon: Icons.shopping_bag_outlined,
+      emptyTitle: 'No active items',
+      emptySubtitle: 'Items in their return period will appear here.',
+      showDaysRemaining: true,
     );
   }
 }
 
-class CalendarTabView extends StatelessWidget {
+class CalendarTabView extends ConsumerStatefulWidget {
   const CalendarTabView({super.key});
 
   @override
+  ConsumerState<CalendarTabView> createState() => _CalendarTabViewState();
+}
+
+class _CalendarTabViewState extends ConsumerState<CalendarTabView> {
+  DateTime _focusedDay = DateTime.now();
+  DateTime _selectedDay = DateTime.now();
+
+  static const _monthNames = <String>[
+    'January',
+    'February',
+    'March',
+    'April',
+    'May',
+    'June',
+    'July',
+    'August',
+    'September',
+    'October',
+    'November',
+    'December',
+  ];
+
+  DateTime _normalizeDate(DateTime date) {
+    return DateTime(date.year, date.month, date.day);
+  }
+
+  List<ReturnItem> _itemsForDay(List<ReturnItem> items, DateTime day) {
+    final normalizedDay = _normalizeDate(day);
+    final filtered = items.where((item) {
+      return _normalizeDate(item.returnDeadline) == normalizedDay;
+    }).toList();
+    filtered.sort((a, b) => a.returnDeadline.compareTo(b.returnDeadline));
+    return filtered;
+  }
+
+  String _formatDate(DateTime date) {
+    return '${_monthNames[date.month - 1]} ${date.day}, ${date.year}';
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return const EmptyState(
-      icon: Icons.event_note_outlined,
-      title: 'No calendar entries',
-      subtitle: 'Upcoming return deadlines will appear here.',
+    final itemsAsync = ref.watch(calendarItemsProvider);
+    return itemsAsync.when(
+      loading: () => const Center(child: CircularProgressIndicator()),
+      error: (error, stackTrace) {
+        return Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Text(
+              'Could not load calendar.\n$error',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: Theme.of(context).colorScheme.error),
+            ),
+          ),
+        );
+      },
+      data: (items) {
+        final selectedDayItems = _itemsForDay(items, _selectedDay);
+        final selectedDayLabel = _formatDate(_selectedDay);
+
+        return Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
+              child: Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(8),
+                  child: TableCalendar<ReturnItem>(
+                    firstDay: DateTime.now().subtract(
+                      const Duration(days: 365),
+                    ),
+                    lastDay: DateTime.now().add(const Duration(days: 365 * 2)),
+                    focusedDay: _focusedDay,
+                    selectedDayPredicate: (day) => isSameDay(_selectedDay, day),
+                    eventLoader: (day) => _itemsForDay(items, day),
+                    headerStyle: const HeaderStyle(
+                      formatButtonVisible: false,
+                      titleCentered: true,
+                    ),
+                    calendarStyle: CalendarStyle(
+                      outsideDaysVisible: false,
+                      todayDecoration: BoxDecoration(
+                        color: Theme.of(context).colorScheme.secondaryContainer,
+                        shape: BoxShape.circle,
+                      ),
+                      selectedDecoration: BoxDecoration(
+                        color: Theme.of(context).colorScheme.primary,
+                        shape: BoxShape.circle,
+                      ),
+                      markerDecoration: BoxDecoration(
+                        color: Theme.of(context).colorScheme.primary,
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                    onDaySelected: (selectedDay, focusedDay) {
+                      setState(() {
+                        _selectedDay = selectedDay;
+                        _focusedDay = focusedDay;
+                      });
+                    },
+                    onPageChanged: (focusedDay) {
+                      setState(() {
+                        _focusedDay = focusedDay;
+                      });
+                    },
+                  ),
+                ),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      selectedDayLabel,
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
+                  ),
+                  Text(
+                    '${selectedDayItems.length} item(s)',
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Expanded(
+              child: selectedDayItems.isEmpty
+                  ? EmptyState(
+                      icon: Icons.event_busy_outlined,
+                      title: 'No deadlines on this day',
+                      subtitle:
+                          'Pick another date with a marker to view return items.',
+                    )
+                  : ListView.separated(
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      itemCount: selectedDayItems.length,
+                      itemBuilder: (context, index) {
+                        return ItemCard(
+                          item: selectedDayItems[index],
+                          showDaysRemaining: true,
+                        );
+                      },
+                      separatorBuilder: (context, index) =>
+                          const SizedBox(height: 10),
+                    ),
+            ),
+          ],
+        );
+      },
     );
   }
 }
@@ -246,28 +422,156 @@ class DecidedTabView extends StatelessWidget {
           ),
           Expanded(
             child: TabBarView(
-              children: [
-                EmptyState(
-                  icon: Icons.favorite_border,
-                  title: 'No kept items',
-                  subtitle: 'Items marked to keep will appear here.',
-                ),
-                EmptyState(
-                  icon: Icons.assignment_return_outlined,
-                  title: 'No return items',
-                  subtitle: 'Items marked for return will appear here.',
-                ),
-                EmptyState(
-                  icon: Icons.hourglass_disabled_outlined,
-                  title: 'No expired items',
-                  subtitle: 'Expired return windows will appear here.',
-                ),
-              ],
+              children: [KeepsTabView(), ReturnsTabView(), ExpiredTabView()],
             ),
           ),
         ],
       ),
     );
+  }
+}
+
+class KeepsTabView extends ConsumerWidget {
+  const KeepsTabView({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final itemsAsync = ref.watch(keepsItemsProvider);
+    return ItemsAsyncList(
+      itemsAsync: itemsAsync,
+      emptyIcon: Icons.favorite_border,
+      emptyTitle: 'No kept items',
+      emptySubtitle: 'Items marked to keep will appear here.',
+    );
+  }
+}
+
+class ReturnsTabView extends ConsumerWidget {
+  const ReturnsTabView({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final itemsAsync = ref.watch(returnsItemsProvider);
+    return ItemsAsyncList(
+      itemsAsync: itemsAsync,
+      emptyIcon: Icons.assignment_return_outlined,
+      emptyTitle: 'No return items',
+      emptySubtitle: 'Items marked for return will appear here.',
+    );
+  }
+}
+
+class ExpiredTabView extends ConsumerWidget {
+  const ExpiredTabView({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final itemsAsync = ref.watch(expiredItemsProvider);
+    return ItemsAsyncList(
+      itemsAsync: itemsAsync,
+      emptyIcon: Icons.hourglass_disabled_outlined,
+      emptyTitle: 'No expired items',
+      emptySubtitle: 'Expired return windows will appear here.',
+    );
+  }
+}
+
+class ItemsAsyncList extends StatelessWidget {
+  const ItemsAsyncList({
+    required this.itemsAsync,
+    required this.emptyIcon,
+    required this.emptyTitle,
+    required this.emptySubtitle,
+    this.showDaysRemaining = false,
+    super.key,
+  });
+
+  final AsyncValue<List<ReturnItem>> itemsAsync;
+  final IconData emptyIcon;
+  final String emptyTitle;
+  final String emptySubtitle;
+  final bool showDaysRemaining;
+
+  @override
+  Widget build(BuildContext context) {
+    return itemsAsync.when(
+      loading: () => const Center(child: CircularProgressIndicator()),
+      error: (error, stackTrace) {
+        return Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Text(
+              'Could not load items.\n$error',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: Theme.of(context).colorScheme.error),
+            ),
+          ),
+        );
+      },
+      data: (items) {
+        if (items.isEmpty) {
+          return EmptyState(
+            icon: emptyIcon,
+            title: emptyTitle,
+            subtitle: emptySubtitle,
+          );
+        }
+
+        return ListView.separated(
+          padding: const EdgeInsets.all(16),
+          itemCount: items.length,
+          itemBuilder: (context, index) {
+            final item = items[index];
+            return ItemCard(item: item, showDaysRemaining: showDaysRemaining);
+          },
+          separatorBuilder: (context, index) => const SizedBox(height: 10),
+        );
+      },
+    );
+  }
+}
+
+class ItemCard extends StatelessWidget {
+  const ItemCard({
+    required this.item,
+    this.showDaysRemaining = false,
+    super.key,
+  });
+
+  final ReturnItem item;
+  final bool showDaysRemaining;
+
+  @override
+  Widget build(BuildContext context) {
+    final daysLabel = _daysRemainingLabel(item.daysRemaining);
+
+    return Card(
+      child: ListTile(
+        leading: CircleAvatar(
+          backgroundColor: Theme.of(context).colorScheme.primaryContainer,
+          child: Text(
+            item.store.label.characters.first,
+            style: TextStyle(
+              color: Theme.of(context).colorScheme.onPrimaryContainer,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ),
+        title: Text(item.title),
+        subtitle: Text('${item.store.label} - ${item.status.label}'),
+        trailing: showDaysRemaining ? Text(daysLabel) : null,
+      ),
+    );
+  }
+
+  String _daysRemainingLabel(int daysRemaining) {
+    if (daysRemaining < 0) {
+      return '${daysRemaining.abs()}d ago';
+    }
+    if (daysRemaining == 0) {
+      return 'Today';
+    }
+    return '${daysRemaining}d left';
   }
 }
 
