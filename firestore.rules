@@ -1,0 +1,211 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isWindowDays(value) {
+      return value is int && value >= 1 && value <= 120;
+    }
+
+    function hasRequiredAndAllowedKeys(data, required, allowed) {
+      return data.keys().hasAll(required) && data.keys().hasOnly(allowed);
+    }
+
+    function isProfileValid(data, userId) {
+      return hasRequiredAndAllowedKeys(
+          data,
+          [
+            'uid',
+            'displayName',
+            'email',
+            'photoUrl',
+            'timezone',
+            'createdAt',
+            'updatedAt',
+          ],
+          [
+            'uid',
+            'displayName',
+            'email',
+            'photoUrl',
+            'timezone',
+            'createdAt',
+            'updatedAt',
+          ],
+        ) &&
+        data.uid == userId &&
+        data.displayName is string &&
+        data.displayName.size() > 0 &&
+        data.displayName.size() <= 80 &&
+        data.email is string &&
+        data.email.size() > 0 &&
+        data.email.size() <= 320 &&
+        (data.photoUrl == null ||
+          (data.photoUrl is string && data.photoUrl.size() <= 2048)) &&
+        data.timezone is string &&
+        data.timezone.size() > 0 &&
+        data.timezone.size() <= 64 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isSettingsValid(data, userId) {
+      return hasRequiredAndAllowedKeys(
+          data,
+          [
+            'uid',
+            'defaultReturnWindowDays',
+            'amazonReturnWindowDays',
+            'sheinReturnWindowDays',
+            'remindersEnabled',
+            'reminderOffsetsDays',
+            'gmailSyncEnabled',
+            'calendarExportEnabled',
+            'createdAt',
+            'updatedAt',
+          ],
+          [
+            'uid',
+            'defaultReturnWindowDays',
+            'amazonReturnWindowDays',
+            'sheinReturnWindowDays',
+            'remindersEnabled',
+            'reminderOffsetsDays',
+            'gmailSyncEnabled',
+            'calendarExportEnabled',
+            'createdAt',
+            'updatedAt',
+          ],
+        ) &&
+        data.uid == userId &&
+        isWindowDays(data.defaultReturnWindowDays) &&
+        isWindowDays(data.amazonReturnWindowDays) &&
+        isWindowDays(data.sheinReturnWindowDays) &&
+        data.remindersEnabled is bool &&
+        data.reminderOffsetsDays is list &&
+        data.reminderOffsetsDays.size() <= 5 &&
+        data.gmailSyncEnabled is bool &&
+        data.calendarExportEnabled is bool &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isItemValid(data, userId) {
+      return hasRequiredAndAllowedKeys(
+          data,
+          [
+            'uid',
+            'title',
+            'store',
+            'status',
+            'deliveredAt',
+            'returnDeadline',
+            'returnWindowDays',
+            'createdAt',
+            'updatedAt',
+          ],
+          [
+            'uid',
+            'title',
+            'store',
+            'status',
+            'deliveredAt',
+            'returnDeadline',
+            'returnWindowDays',
+            'createdAt',
+            'updatedAt',
+            'orderId',
+            'normalizedTitle',
+            'source',
+            'messageIds',
+            'notes',
+          ],
+        ) &&
+        data.uid == userId &&
+        data.title is string &&
+        data.title.size() > 0 &&
+        data.title.size() <= 200 &&
+        data.store is string &&
+        data.store in ['amazon', 'shein', 'other'] &&
+        data.status is string &&
+        data.status in ['pending', 'keep', 'return', 'expired'] &&
+        data.deliveredAt is timestamp &&
+        data.returnDeadline is timestamp &&
+        isWindowDays(data.returnWindowDays) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp &&
+        (
+          !('orderId' in data) ||
+          data.orderId == null ||
+          (data.orderId is string && data.orderId.size() <= 120)
+        ) &&
+        (
+          !('normalizedTitle' in data) ||
+          (data.normalizedTitle is string && data.normalizedTitle.size() <= 200)
+        ) &&
+        (
+          !('source' in data) ||
+          (data.source is string && data.source in ['manual', 'gmail_sync'])
+        ) &&
+        (
+          !('messageIds' in data) ||
+          (data.messageIds is list && data.messageIds.size() <= 100)
+        ) &&
+        (
+          !('notes' in data) ||
+          (data.notes is string && data.notes.size() <= 1000)
+        );
+    }
+
+    match /users/{userId} {
+      allow read, write: if false;
+
+      match /profile/{profileDocId} {
+        allow read: if isOwner(userId) && profileDocId == 'default';
+        allow create: if isOwner(userId) &&
+          profileDocId == 'default' &&
+          isProfileValid(request.resource.data, userId);
+        allow update: if isOwner(userId) &&
+          profileDocId == 'default' &&
+          isProfileValid(request.resource.data, userId) &&
+          request.resource.data.uid == resource.data.uid &&
+          request.resource.data.createdAt == resource.data.createdAt;
+        allow delete: if false;
+      }
+
+      match /settings/{settingsDocId} {
+        allow read: if isOwner(userId) && settingsDocId == 'default';
+        allow create: if isOwner(userId) &&
+          settingsDocId == 'default' &&
+          isSettingsValid(request.resource.data, userId);
+        allow update: if isOwner(userId) &&
+          settingsDocId == 'default' &&
+          isSettingsValid(request.resource.data, userId) &&
+          request.resource.data.uid == resource.data.uid &&
+          request.resource.data.createdAt == resource.data.createdAt;
+        allow delete: if false;
+      }
+
+      match /items/{itemId} {
+        allow read: if isOwner(userId);
+        allow create: if isOwner(userId) &&
+          isItemValid(request.resource.data, userId);
+        allow update: if isOwner(userId) &&
+          isItemValid(request.resource.data, userId) &&
+          request.resource.data.uid == resource.data.uid &&
+          request.resource.data.createdAt == resource.data.createdAt;
+        allow delete: if isOwner(userId);
+      }
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
