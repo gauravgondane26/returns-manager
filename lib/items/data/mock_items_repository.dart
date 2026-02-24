@@ -10,6 +10,26 @@ class MockItemsRepository implements ItemsRepository {
     return Stream.value(_seedItems(uid: uid));
   }
 
+  @override
+  Future<void> createManualItem({
+    required String uid,
+    required String title,
+    required StoreType store,
+    required ItemStatus status,
+    required DateTime deliveredAt,
+    required DateTime returnDeadline,
+    String? notes,
+  }) async {}
+
+  @override
+  Future<void> updateItem(ReturnItem item) async {}
+
+  @override
+  Future<void> deleteItem({
+    required String uid,
+    required String itemId,
+  }) async {}
+
   List<ReturnItem> _seedItems({required String uid}) {
     final now = DateTime.now();
 

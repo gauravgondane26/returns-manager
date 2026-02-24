@@ -163,6 +163,18 @@ class _AppShellState extends State<AppShell> {
     await FirebaseAuth.instance.signOut();
   }
 
+  Future<void> _openCreateItem() async {
+    await Navigator.of(
+      context,
+    ).push(MaterialPageRoute<void>(builder: (_) => const ItemEditorPage()));
+  }
+
+  Future<void> _openEditItem(ReturnItem item) async {
+    await Navigator.of(
+      context,
+    ).push(MaterialPageRoute<void>(builder: (_) => ItemEditorPage(item: item)));
+  }
+
   @override
   Widget build(BuildContext context) {
     final tabTitles = ['Home', 'Calendar', 'Decided'];
@@ -180,10 +192,10 @@ class _AppShellState extends State<AppShell> {
           Expanded(
             child: IndexedStack(
               index: _currentTabIndex,
-              children: const [
-                HomeTabView(),
-                CalendarTabView(),
-                DecidedTabView(),
+              children: [
+                HomeTabView(onItemTap: _openEditItem),
+                CalendarTabView(onItemTap: _openEditItem),
+                DecidedTabView(onItemTap: _openEditItem),
               ],
             ),
           ),
@@ -199,6 +211,13 @@ class _AppShellState extends State<AppShell> {
             ),
         ],
       ),
+      floatingActionButton: _currentTabIndex == 0
+          ? FloatingActionButton.extended(
+              onPressed: _openCreateItem,
+              icon: const Icon(Icons.add),
+              label: const Text('Add item'),
+            )
+          : null,
       bottomNavigationBar: NavigationBar(
         selectedIndex: _currentTabIndex,
         onDestinationSelected: (value) {
@@ -229,23 +248,95 @@ class _AppShellState extends State<AppShell> {
 }
 
 class HomeTabView extends ConsumerWidget {
-  const HomeTabView({super.key});
+  const HomeTabView({required this.onItemTap, super.key});
+
+  final ValueChanged<ReturnItem> onItemTap;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final itemsAsync = ref.watch(homeItemsProvider);
+
+    Future<bool> handleSwipeStatus({
+      required ReturnItem item,
+      required ItemStatus targetStatus,
+    }) async {
+      final actionLabel = targetStatus == ItemStatus.keep ? 'Keep' : 'Return';
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (context) {
+          return AlertDialog(
+            title: Text('$actionLabel item?'),
+            content: Text('Set "${item.title}" to ${targetStatus.label}?'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(false),
+                child: const Text('Cancel'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.of(context).pop(true),
+                child: const Text('Confirm'),
+              ),
+            ],
+          );
+        },
+      );
+
+      if (confirmed != true) {
+        return false;
+      }
+
+      final repository = ref.read(itemsRepositoryProvider);
+      final updated = item.copyWith(
+        status: targetStatus,
+        updatedAt: DateTime.now(),
+      );
+
+      try {
+        await repository.updateItem(updated);
+      } catch (error) {
+        if (!context.mounted) {
+          return false;
+        }
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Status update failed: $error')));
+        return false;
+      }
+
+      if (!context.mounted) {
+        return true;
+      }
+
+      final statusLabel = targetStatus == ItemStatus.keep
+          ? 'Marked as Keep'
+          : 'Marked for Return';
+
+      ScaffoldMessenger.of(context).hideCurrentSnackBar();
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(statusLabel)));
+      return true;
+    }
+
     return ItemsAsyncList(
       itemsAsync: itemsAsync,
       emptyIcon: Icons.shopping_bag_outlined,
       emptyTitle: 'No active items',
       emptySubtitle: 'Items in their return period will appear here.',
       showDaysRemaining: true,
+      onItemTap: onItemTap,
+      onSwipeRight: (item) =>
+          handleSwipeStatus(item: item, targetStatus: ItemStatus.keep),
+      onSwipeLeft: (item) =>
+          handleSwipeStatus(item: item, targetStatus: ItemStatus.returnItem),
     );
   }
 }
 
 class CalendarTabView extends ConsumerStatefulWidget {
-  const CalendarTabView({super.key});
+  const CalendarTabView({required this.onItemTap, super.key});
+
+  final ValueChanged<ReturnItem> onItemTap;
 
   @override
   ConsumerState<CalendarTabView> createState() => _CalendarTabViewState();
@@ -391,6 +482,8 @@ class _CalendarTabViewState extends ConsumerState<CalendarTabView> {
                         return ItemCard(
                           item: selectedDayItems[index],
                           showDaysRemaining: true,
+                          onTap: () =>
+                              widget.onItemTap(selectedDayItems[index]),
                         );
                       },
                       separatorBuilder: (context, index) =>
@@ -405,14 +498,16 @@ class _CalendarTabViewState extends ConsumerState<CalendarTabView> {
 }
 
 class DecidedTabView extends StatelessWidget {
-  const DecidedTabView({super.key});
+  const DecidedTabView({required this.onItemTap, super.key});
+
+  final ValueChanged<ReturnItem> onItemTap;
 
   @override
   Widget build(BuildContext context) {
     return DefaultTabController(
       length: 3,
       child: Column(
-        children: const [
+        children: [
           TabBar(
             tabs: [
               Tab(text: 'Keeps'),
@@ -422,7 +517,11 @@ class DecidedTabView extends StatelessWidget {
           ),
           Expanded(
             child: TabBarView(
-              children: [KeepsTabView(), ReturnsTabView(), ExpiredTabView()],
+              children: [
+                KeepsTabView(onItemTap: onItemTap),
+                ReturnsTabView(onItemTap: onItemTap),
+                ExpiredTabView(onItemTap: onItemTap),
+              ],
             ),
           ),
         ],
@@ -432,7 +531,9 @@ class DecidedTabView extends StatelessWidget {
 }
 
 class KeepsTabView extends ConsumerWidget {
-  const KeepsTabView({super.key});
+  const KeepsTabView({required this.onItemTap, super.key});
+
+  final ValueChanged<ReturnItem> onItemTap;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -442,12 +543,15 @@ class KeepsTabView extends ConsumerWidget {
       emptyIcon: Icons.favorite_border,
       emptyTitle: 'No kept items',
       emptySubtitle: 'Items marked to keep will appear here.',
+      onItemTap: onItemTap,
     );
   }
 }
 
 class ReturnsTabView extends ConsumerWidget {
-  const ReturnsTabView({super.key});
+  const ReturnsTabView({required this.onItemTap, super.key});
+
+  final ValueChanged<ReturnItem> onItemTap;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -457,12 +561,15 @@ class ReturnsTabView extends ConsumerWidget {
       emptyIcon: Icons.assignment_return_outlined,
       emptyTitle: 'No return items',
       emptySubtitle: 'Items marked for return will appear here.',
+      onItemTap: onItemTap,
     );
   }
 }
 
 class ExpiredTabView extends ConsumerWidget {
-  const ExpiredTabView({super.key});
+  const ExpiredTabView({required this.onItemTap, super.key});
+
+  final ValueChanged<ReturnItem> onItemTap;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -472,6 +579,7 @@ class ExpiredTabView extends ConsumerWidget {
       emptyIcon: Icons.hourglass_disabled_outlined,
       emptyTitle: 'No expired items',
       emptySubtitle: 'Expired return windows will appear here.',
+      onItemTap: onItemTap,
     );
   }
 }
@@ -482,6 +590,9 @@ class ItemsAsyncList extends StatelessWidget {
     required this.emptyIcon,
     required this.emptyTitle,
     required this.emptySubtitle,
+    required this.onItemTap,
+    this.onSwipeRight,
+    this.onSwipeLeft,
     this.showDaysRemaining = false,
     super.key,
   });
@@ -490,6 +601,9 @@ class ItemsAsyncList extends StatelessWidget {
   final IconData emptyIcon;
   final String emptyTitle;
   final String emptySubtitle;
+  final ValueChanged<ReturnItem> onItemTap;
+  final Future<bool> Function(ReturnItem item)? onSwipeRight;
+  final Future<bool> Function(ReturnItem item)? onSwipeLeft;
   final bool showDaysRemaining;
 
   @override
@@ -522,11 +636,116 @@ class ItemsAsyncList extends StatelessWidget {
           itemCount: items.length,
           itemBuilder: (context, index) {
             final item = items[index];
-            return ItemCard(item: item, showDaysRemaining: showDaysRemaining);
+            final card = ItemCard(
+              item: item,
+              showDaysRemaining: showDaysRemaining,
+              onTap: () => onItemTap(item),
+            );
+
+            final dismissDirection = _dismissDirection();
+            if (dismissDirection == DismissDirection.none) {
+              return card;
+            }
+
+            return Dismissible(
+              key: ValueKey(
+                'item-${item.id}-${item.updatedAt.toIso8601String()}',
+              ),
+              direction: dismissDirection,
+              confirmDismiss: (direction) async {
+                if (direction == DismissDirection.startToEnd) {
+                  if (onSwipeRight == null) {
+                    return false;
+                  }
+                  return onSwipeRight!(item);
+                }
+                if (direction == DismissDirection.endToStart) {
+                  if (onSwipeLeft == null) {
+                    return false;
+                  }
+                  return onSwipeLeft!(item);
+                }
+                return false;
+              },
+              onDismissed: (_) {
+                if (!context.mounted) {
+                  return;
+                }
+                ScaffoldMessenger.of(context).hideCurrentSnackBar();
+              },
+              background: const _SwipeBackground(
+                label: 'Keep',
+                icon: Icons.favorite,
+                alignStart: true,
+                color: Colors.green,
+              ),
+              secondaryBackground: const _SwipeBackground(
+                label: 'Return',
+                icon: Icons.assignment_return,
+                alignStart: false,
+                color: Colors.orange,
+              ),
+              child: card,
+            );
           },
           separatorBuilder: (context, index) => const SizedBox(height: 10),
         );
       },
+    );
+  }
+
+  DismissDirection _dismissDirection() {
+    final canSwipeRight = onSwipeRight != null;
+    final canSwipeLeft = onSwipeLeft != null;
+    if (canSwipeRight && canSwipeLeft) {
+      return DismissDirection.horizontal;
+    }
+    if (canSwipeRight) {
+      return DismissDirection.startToEnd;
+    }
+    if (canSwipeLeft) {
+      return DismissDirection.endToStart;
+    }
+    return DismissDirection.none;
+  }
+}
+
+class _SwipeBackground extends StatelessWidget {
+  const _SwipeBackground({
+    required this.label,
+    required this.icon,
+    required this.alignStart,
+    required this.color,
+  });
+
+  final String label;
+  final IconData icon;
+  final bool alignStart;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      alignment: alignStart ? Alignment.centerLeft : Alignment.centerRight,
+      padding: const EdgeInsets.symmetric(horizontal: 20),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.18),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (!alignStart) ...[
+            Text(label, style: TextStyle(color: color)),
+            const SizedBox(width: 8),
+            Icon(icon, color: color),
+          ] else ...[
+            Icon(icon, color: color),
+            const SizedBox(width: 8),
+            Text(label, style: TextStyle(color: color)),
+          ],
+        ],
+      ),
     );
   }
 }
@@ -535,11 +754,13 @@ class ItemCard extends StatelessWidget {
   const ItemCard({
     required this.item,
     this.showDaysRemaining = false,
+    this.onTap,
     super.key,
   });
 
   final ReturnItem item;
   final bool showDaysRemaining;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
@@ -560,6 +781,7 @@ class ItemCard extends StatelessWidget {
         title: Text(item.title),
         subtitle: Text('${item.store.label} - ${item.status.label}'),
         trailing: showDaysRemaining ? Text(daysLabel) : null,
+        onTap: onTap,
       ),
     );
   }
@@ -572,6 +794,424 @@ class ItemCard extends StatelessWidget {
       return 'Today';
     }
     return '${daysRemaining}d left';
+  }
+}
+
+class ItemEditorPage extends ConsumerStatefulWidget {
+  const ItemEditorPage({this.item, super.key});
+
+  final ReturnItem? item;
+
+  bool get isEditing => item != null;
+
+  @override
+  ConsumerState<ItemEditorPage> createState() => _ItemEditorPageState();
+}
+
+class _ItemEditorPageState extends ConsumerState<ItemEditorPage> {
+  final _formKey = GlobalKey<FormState>();
+  final _titleController = TextEditingController();
+  final _notesController = TextEditingController();
+
+  late StoreType _store;
+  late ItemStatus _status;
+  late DateTime _deliveredAt;
+  late DateTime _returnDeadline;
+
+  bool _isSaving = false;
+  bool _isDeleting = false;
+
+  static const _monthNames = <String>[
+    'January',
+    'February',
+    'March',
+    'April',
+    'May',
+    'June',
+    'July',
+    'August',
+    'September',
+    'October',
+    'November',
+    'December',
+  ];
+
+  @override
+  void initState() {
+    super.initState();
+    final item = widget.item;
+    final now = DateTime.now();
+    _store = item?.store ?? StoreType.other;
+    _status = item?.status ?? ItemStatus.pending;
+    final initialDelivered = item?.deliveredAt ?? now;
+    _deliveredAt = DateTime(
+      initialDelivered.year,
+      initialDelivered.month,
+      initialDelivered.day,
+    );
+    final initialDeadline =
+        item?.returnDeadline ?? now.add(const Duration(days: 30));
+    final normalizedDeadline = DateTime(
+      initialDeadline.year,
+      initialDeadline.month,
+      initialDeadline.day,
+    );
+    final maxDeadline = _maxDeadlineForDelivered(_deliveredAt);
+    if (normalizedDeadline.isBefore(_deliveredAt)) {
+      _returnDeadline = _deliveredAt;
+    } else if (normalizedDeadline.isAfter(maxDeadline)) {
+      _returnDeadline = maxDeadline;
+    } else {
+      _returnDeadline = normalizedDeadline;
+    }
+    _titleController.text = item?.title ?? '';
+    _notesController.text = item?.notes ?? '';
+  }
+
+  @override
+  void dispose() {
+    _titleController.dispose();
+    _notesController.dispose();
+    super.dispose();
+  }
+
+  String _formatDate(DateTime date) {
+    return '${_monthNames[date.month - 1]} ${date.day}, ${date.year}';
+  }
+
+  int _calculateReturnWindowDays({
+    required DateTime deliveredAt,
+    required DateTime returnDeadline,
+  }) {
+    final delivered = DateTime(
+      deliveredAt.year,
+      deliveredAt.month,
+      deliveredAt.day,
+    );
+    final deadline = DateTime(
+      returnDeadline.year,
+      returnDeadline.month,
+      returnDeadline.day,
+    );
+    final days = deadline.difference(delivered).inDays + 1;
+    if (days < 1) {
+      return 1;
+    }
+    if (days > 120) {
+      return 120;
+    }
+    return days;
+  }
+
+  DateTime _maxDeadlineForDelivered(DateTime deliveredAt) {
+    return DateTime(
+      deliveredAt.year,
+      deliveredAt.month,
+      deliveredAt.day,
+    ).add(const Duration(days: 119));
+  }
+
+  Future<void> _pickDeliveredDate() async {
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _deliveredAt,
+      firstDate: DateTime.now().subtract(const Duration(days: 365 * 3)),
+      lastDate: DateTime.now().add(const Duration(days: 365 * 2)),
+    );
+    if (picked == null) {
+      return;
+    }
+
+    setState(() {
+      _deliveredAt = DateTime(picked.year, picked.month, picked.day);
+      if (_returnDeadline.isBefore(_deliveredAt)) {
+        _returnDeadline = _deliveredAt;
+      }
+      final maxDeadline = _maxDeadlineForDelivered(_deliveredAt);
+      if (_returnDeadline.isAfter(maxDeadline)) {
+        _returnDeadline = maxDeadline;
+      }
+    });
+  }
+
+  Future<void> _pickReturnDeadline() async {
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _returnDeadline,
+      firstDate: _deliveredAt,
+      lastDate: _maxDeadlineForDelivered(_deliveredAt),
+    );
+    if (picked == null) {
+      return;
+    }
+
+    setState(() {
+      _returnDeadline = DateTime(picked.year, picked.month, picked.day);
+    });
+  }
+
+  Future<void> _save() async {
+    if (_isSaving || _isDeleting) {
+      return;
+    }
+    if (!_formKey.currentState!.validate()) {
+      return;
+    }
+
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('No authenticated user.')));
+      return;
+    }
+
+    final title = _titleController.text.trim();
+    final notes = _notesController.text.trim().isEmpty
+        ? null
+        : _notesController.text.trim();
+    final repository = ref.read(itemsRepositoryProvider);
+
+    setState(() {
+      _isSaving = true;
+    });
+
+    try {
+      if (widget.item == null) {
+        await repository.createManualItem(
+          uid: uid,
+          title: title,
+          store: _store,
+          status: _status,
+          deliveredAt: _deliveredAt,
+          returnDeadline: _returnDeadline,
+          notes: notes,
+        );
+      } else {
+        final now = DateTime.now();
+        final updated = widget.item!.copyWith(
+          title: title,
+          store: _store,
+          status: _status,
+          deliveredAt: _deliveredAt,
+          returnDeadline: _returnDeadline,
+          returnWindowDays: _calculateReturnWindowDays(
+            deliveredAt: _deliveredAt,
+            returnDeadline: _returnDeadline,
+          ),
+          normalizedTitle: title.toLowerCase(),
+          notes: notes,
+          updatedAt: now,
+        );
+        await repository.updateItem(updated);
+      }
+
+      if (mounted) {
+        Navigator.of(context).pop();
+      }
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Save failed: $error')));
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isSaving = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _delete() async {
+    final item = widget.item;
+    if (item == null || _isSaving || _isDeleting) {
+      return;
+    }
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('Delete item?'),
+          content: const Text('This action cannot be undone.'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('Delete'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (confirmed != true) {
+      return;
+    }
+
+    setState(() {
+      _isDeleting = true;
+    });
+
+    try {
+      final repository = ref.read(itemsRepositoryProvider);
+      await repository.deleteItem(uid: item.uid, itemId: item.id);
+
+      if (mounted) {
+        Navigator.of(context).pop();
+      }
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Delete failed: $error')));
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isDeleting = false;
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isBusy = _isSaving || _isDeleting;
+    final title = widget.isEditing ? 'Edit Item' : 'Create Item';
+
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(title),
+        actions: [
+          TextButton(
+            onPressed: isBusy ? null : _save,
+            child: Text(_isSaving ? 'Saving...' : 'Save'),
+          ),
+        ],
+      ),
+      body: SafeArea(
+        child: Form(
+          key: _formKey,
+          child: ListView(
+            padding: const EdgeInsets.all(16),
+            children: [
+              TextFormField(
+                controller: _titleController,
+                enabled: !isBusy,
+                decoration: const InputDecoration(
+                  labelText: 'Title',
+                  border: OutlineInputBorder(),
+                ),
+                maxLength: 200,
+                validator: (value) {
+                  if (value == null || value.trim().isEmpty) {
+                    return 'Title is required.';
+                  }
+                  return null;
+                },
+              ),
+              const SizedBox(height: 12),
+              DropdownButtonFormField<StoreType>(
+                initialValue: _store,
+                decoration: const InputDecoration(
+                  labelText: 'Store',
+                  border: OutlineInputBorder(),
+                ),
+                items: StoreType.values
+                    .map(
+                      (store) => DropdownMenuItem<StoreType>(
+                        value: store,
+                        child: Text(store.label),
+                      ),
+                    )
+                    .toList(),
+                onChanged: isBusy
+                    ? null
+                    : (value) {
+                        if (value != null) {
+                          setState(() {
+                            _store = value;
+                          });
+                        }
+                      },
+              ),
+              const SizedBox(height: 12),
+              DropdownButtonFormField<ItemStatus>(
+                initialValue: _status,
+                decoration: const InputDecoration(
+                  labelText: 'Status',
+                  border: OutlineInputBorder(),
+                ),
+                items: ItemStatus.values
+                    .map(
+                      (status) => DropdownMenuItem<ItemStatus>(
+                        value: status,
+                        child: Text(status.label),
+                      ),
+                    )
+                    .toList(),
+                onChanged: isBusy
+                    ? null
+                    : (value) {
+                        if (value != null) {
+                          setState(() {
+                            _status = value;
+                          });
+                        }
+                      },
+              ),
+              const SizedBox(height: 12),
+              Card(
+                child: ListTile(
+                  title: const Text('Delivered Date'),
+                  subtitle: Text(_formatDate(_deliveredAt)),
+                  trailing: const Icon(Icons.calendar_today_outlined),
+                  onTap: isBusy ? null : _pickDeliveredDate,
+                ),
+              ),
+              Card(
+                child: ListTile(
+                  title: const Text('Return Deadline'),
+                  subtitle: Text(_formatDate(_returnDeadline)),
+                  trailing: const Icon(Icons.event_outlined),
+                  onTap: isBusy ? null : _pickReturnDeadline,
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextFormField(
+                controller: _notesController,
+                enabled: !isBusy,
+                maxLines: 3,
+                maxLength: 1000,
+                decoration: const InputDecoration(
+                  labelText: 'Notes (optional)',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              if (widget.isEditing) ...[
+                const SizedBox(height: 16),
+                OutlinedButton.icon(
+                  onPressed: isBusy ? null : _delete,
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Theme.of(context).colorScheme.error,
+                  ),
+                  icon: const Icon(Icons.delete_outline),
+                  label: Text(_isDeleting ? 'Deleting...' : 'Delete item'),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
   }
 }
 

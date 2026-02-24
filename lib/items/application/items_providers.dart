@@ -1,13 +1,14 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../data/firestore_items_repository.dart';
 import '../data/items_repository.dart';
-import '../data/mock_items_repository.dart';
 import '../domain/item_enums.dart';
 import '../domain/return_item.dart';
 
 final itemsRepositoryProvider = Provider<ItemsRepository>((ref) {
-  return MockItemsRepository();
+  return FirestoreItemsRepository(FirebaseFirestore.instance);
 });
 
 final currentUserIdProvider = Provider<String?>((ref) {
@@ -22,6 +23,15 @@ final currentUserItemsProvider = StreamProvider<List<ReturnItem>>((ref) {
 
   final repository = ref.watch(itemsRepositoryProvider);
   return repository.watchItems(uid: uid);
+});
+
+final allItemsProvider = Provider<AsyncValue<List<ReturnItem>>>((ref) {
+  final itemsAsync = ref.watch(currentUserItemsProvider);
+  return itemsAsync.whenData((items) {
+    final sorted = [...items];
+    sorted.sort((a, b) => a.returnDeadline.compareTo(b.returnDeadline));
+    return sorted;
+  });
 });
 
 final homeItemsProvider = Provider<AsyncValue<List<ReturnItem>>>((ref) {
