@@ -1,17 +1,29 @@
-# returnsmanager
+# Returns Manager
 
-A new Flutter project.
+Flutter app for tracking return windows, Gmail delivery ingestion, reminders,
+calendar export, and offline-first Firestore sync.
 
-## Getting Started
+## Local Development
 
-This project is a starting point for a Flutter application.
+```bash
+flutter pub get
+flutter run -d <device-id>
+```
 
-A few resources to get you started if this is your first Flutter project:
+## Validation
 
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
+```bash
+flutter analyze
+flutter test
+```
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+## Docs
+- `docs/quality/performance_checks.md`
+- `docs/release/testflight_release_path.md`
+
+## Firebase
+- Firestore rules are in `firestore.rules`.
+- After changing rules, deploy with:
+  ```bash
+  firebase deploy --only firestore:rules
+  ```

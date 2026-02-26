@@ -6,6 +6,7 @@ class UserSubcollections {
   static const items = 'items';
   static const profile = 'profile';
   static const settings = 'settings';
+  static const telemetry = 'telemetry';
 }
 
 class SingletonDocs {
@@ -72,6 +73,23 @@ class SettingsFields {
   static const reminderOffsetsDays = 'reminderOffsetsDays';
   static const gmailSyncEnabled = 'gmailSyncEnabled';
   static const calendarExportEnabled = 'calendarExportEnabled';
+  static const createdAt = 'createdAt';
+  static const updatedAt = 'updatedAt';
+}
+
+class TelemetryType {
+  static const gmailParseMiss = 'gmail_parse_miss';
+}
+
+class TelemetryFields {
+  static const uid = 'uid';
+  static const type = 'type';
+  static const messageId = 'messageId';
+  static const reason = 'reason';
+  static const storeHint = 'storeHint';
+  static const fromDomain = 'fromDomain';
+  static const subjectSample = 'subjectSample';
+  static const snippetSample = 'snippetSample';
   static const createdAt = 'createdAt';
   static const updatedAt = 'updatedAt';
 }

@@ -163,6 +163,57 @@ service cloud.firestore {
         );
     }
 
+    function isParseMissTelemetryValid(data, userId) {
+      return hasRequiredAndAllowedKeys(
+          data,
+          [
+            'uid',
+            'type',
+            'messageId',
+            'reason',
+            'storeHint',
+            'fromDomain',
+            'subjectSample',
+            'snippetSample',
+            'createdAt',
+            'updatedAt',
+          ],
+          [
+            'uid',
+            'type',
+            'messageId',
+            'reason',
+            'storeHint',
+            'fromDomain',
+            'subjectSample',
+            'snippetSample',
+            'createdAt',
+            'updatedAt',
+          ],
+        ) &&
+        data.uid == userId &&
+        data.type is string &&
+        data.type == 'gmail_parse_miss' &&
+        data.messageId is string &&
+        data.messageId.size() > 0 &&
+        data.messageId.size() <= 120 &&
+        data.reason is string &&
+        data.reason.size() > 0 &&
+        data.reason.size() <= 80 &&
+        data.storeHint is string &&
+        data.storeHint.size() > 0 &&
+        data.storeHint.size() <= 32 &&
+        data.fromDomain is string &&
+        data.fromDomain.size() > 0 &&
+        data.fromDomain.size() <= 120 &&
+        data.subjectSample is string &&
+        data.subjectSample.size() <= 160 &&
+        data.snippetSample is string &&
+        data.snippetSample.size() <= 200 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
     match /users/{userId} {
       allow read, write: if false;
 
@@ -201,6 +252,19 @@ service cloud.firestore {
           request.resource.data.uid == resource.data.uid &&
           request.resource.data.createdAt == resource.data.createdAt;
         allow delete: if isOwner(userId);
+      }
+
+      match /telemetry/{telemetryDocId} {
+        allow read: if isOwner(userId);
+        allow create: if isOwner(userId) &&
+          isParseMissTelemetryValid(request.resource.data, userId);
+        allow update: if isOwner(userId) &&
+          isParseMissTelemetryValid(request.resource.data, userId) &&
+          request.resource.data.uid == resource.data.uid &&
+          request.resource.data.createdAt == resource.data.createdAt &&
+          request.resource.data.type == resource.data.type &&
+          request.resource.data.messageId == resource.data.messageId;
+        allow delete: if false;
       }
     }
 

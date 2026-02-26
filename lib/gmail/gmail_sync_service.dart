@@ -8,38 +8,53 @@ import 'package:meta/meta.dart';
 
 import '../contracts/firestore_contract.dart' as contract;
 import '../items/domain/deadline_engine.dart';
+import 'parse_miss_telemetry_service.dart';
 
 class GmailSyncResult {
   const GmailSyncResult({
     required this.fetchedMessages,
     required this.candidatesFound,
     required this.upserts,
+    this.parseMisses = 0,
+    this.failedMessages = 0,
+    this.elapsedMs = 0,
   });
 
   final int fetchedMessages;
   final int candidatesFound;
   final int upserts;
+  final int parseMisses;
+  final int failedMessages;
+  final int elapsedMs;
 }
 
 class GmailSyncService {
-  GmailSyncService({FirebaseFirestore? firestore, GoogleSignIn? googleSignIn})
-    : _firestore = firestore ?? FirebaseFirestore.instance,
-      _googleSignIn =
-          googleSignIn ??
-          GoogleSignIn(
-            scopes: const [
-              'email',
-              'https://www.googleapis.com/auth/gmail.readonly',
-            ],
-          );
+  GmailSyncService({
+    FirebaseFirestore? firestore,
+    GoogleSignIn? googleSignIn,
+    ParseMissTelemetryService? parseMissTelemetry,
+  }) : _firestore = firestore ?? FirebaseFirestore.instance,
+       _googleSignIn =
+           googleSignIn ??
+           GoogleSignIn(
+             scopes: const [
+               'email',
+               'https://www.googleapis.com/auth/gmail.readonly',
+             ],
+           ),
+       _parseMissTelemetry =
+           parseMissTelemetry ??
+           ParseMissTelemetryService(firestore: firestore);
 
   final FirebaseFirestore _firestore;
   final GoogleSignIn _googleSignIn;
+  final ParseMissTelemetryService _parseMissTelemetry;
 
   static const _gmailReadonlyScope =
       'https://www.googleapis.com/auth/gmail.readonly';
 
   Future<GmailSyncResult> syncDeliveries({int maxResults = 12}) async {
+    final stopwatch = Stopwatch()..start();
     final firebaseUser = FirebaseAuth.instance.currentUser;
     if (firebaseUser == null) {
       throw Exception('You must be signed in to sync Gmail.');
@@ -69,28 +84,41 @@ class GmailSyncService {
 
     var candidateCount = 0;
     var upserts = 0;
+    var parseMisses = 0;
+    var failedMessages = 0;
     for (final messageId in messageIds) {
-      final candidate = await _fetchCandidateMessage(
-        headers: headers,
-        messageId: messageId,
-      );
-      if (candidate == null) {
-        continue;
-      }
-      final upserted = await _upsertCandidate(
-        uid: firebaseUser.uid,
-        candidate: candidate,
-      );
-      if (upserted) {
+      try {
+        final candidate = await _fetchCandidateMessage(
+          headers: headers,
+          messageId: messageId,
+        );
+        if (candidate == null) {
+          continue;
+        }
         candidateCount += 1;
-        upserts += 1;
+
+        final outcome = await _upsertCandidate(
+          uid: firebaseUser.uid,
+          candidate: candidate,
+        );
+        if (outcome == _UpsertOutcome.upserted) {
+          upserts += 1;
+        } else if (outcome == _UpsertOutcome.parseMiss) {
+          parseMisses += 1;
+        }
+      } catch (_) {
+        failedMessages += 1;
       }
     }
 
+    stopwatch.stop();
     return GmailSyncResult(
       fetchedMessages: messageIds.length,
       candidatesFound: candidateCount,
       upserts: upserts,
+      parseMisses: parseMisses,
+      failedMessages: failedMessages,
+      elapsedMs: stopwatch.elapsedMilliseconds,
     );
   }
 
@@ -194,13 +222,20 @@ class GmailSyncService {
     );
   }
 
-  Future<bool> _upsertCandidate({
+  Future<_UpsertOutcome> _upsertCandidate({
     required String uid,
     required _GmailCandidate candidate,
   }) async {
-    final parsed = _parseDeliveryCandidate(candidate);
+    final parseAttempt = _parseDeliveryCandidateWithReason(candidate);
+    final parsed = parseAttempt.parsed;
     if (parsed == null) {
-      return false;
+      await _trackParseMissSafe(
+        uid: uid,
+        candidate: candidate,
+        reason: parseAttempt.reason,
+        storeHint: parseAttempt.storeHint,
+      );
+      return _UpsertOutcome.parseMiss;
     }
 
     final docId = _dedupeDocId(uid: uid, parsed: parsed);
@@ -269,7 +304,28 @@ class GmailSyncService {
         contract.ItemFields.orderId: mergedOrderId,
     }, SetOptions(merge: true));
 
-    return true;
+    return _UpsertOutcome.upserted;
+  }
+
+  Future<void> _trackParseMissSafe({
+    required String uid,
+    required _GmailCandidate candidate,
+    required String reason,
+    required String storeHint,
+  }) async {
+    try {
+      await _parseMissTelemetry.trackParseMiss(
+        uid: uid,
+        messageId: candidate.messageId,
+        reason: reason,
+        storeHint: storeHint,
+        from: candidate.from,
+        subject: candidate.subject,
+        snippet: candidate.snippet,
+      );
+    } catch (_) {
+      // Best-effort telemetry only.
+    }
   }
 
   @visibleForTesting
@@ -291,7 +347,7 @@ class GmailSyncService {
         snippet: snippet,
         deliveredAt: deliveredAt,
       ),
-    );
+    ).then((outcome) => outcome == _UpsertOutcome.upserted);
   }
 
   @visibleForTesting
@@ -358,19 +414,31 @@ class GmailSyncService {
   }
 
   _ParsedDelivery? _parseDeliveryCandidate(_GmailCandidate candidate) {
+    return _parseDeliveryCandidateWithReason(candidate).parsed;
+  }
+
+  _ParseCandidateOutcome _parseDeliveryCandidateWithReason(
+    _GmailCandidate candidate,
+  ) {
     final store = _inferStore(
       from: candidate.from,
       subject: candidate.subject,
       snippet: candidate.snippet,
     );
     if (store == contract.StoreType.other) {
-      return null;
+      return const _ParseCandidateOutcome(
+        reason: 'unknown_store',
+        storeHint: contract.StoreType.other,
+      );
     }
 
     final content = '${candidate.subject}\n${candidate.snippet}'.toLowerCase();
     final isDelivered = _deliverySignalRegex.hasMatch(content);
     if (!isDelivered) {
-      return null;
+      return _ParseCandidateOutcome(
+        reason: 'missing_delivery_signal',
+        storeHint: store,
+      );
     }
 
     final orderId = _extractOrderId(
@@ -394,14 +462,18 @@ class GmailSyncService {
       returnWindowDays: returnWindowDays,
     );
 
-    return _ParsedDelivery(
-      store: store,
-      orderId: orderId,
-      title: title,
-      normalizedTitle: normalizedTitle,
-      deliveredAtDay: deliveredAtDay,
-      returnWindowDays: returnWindowDays,
-      returnDeadline: returnDeadline,
+    return _ParseCandidateOutcome(
+      reason: 'parsed',
+      storeHint: store,
+      parsed: _ParsedDelivery(
+        store: store,
+        orderId: orderId,
+        title: title,
+        normalizedTitle: normalizedTitle,
+        deliveredAtDay: deliveredAtDay,
+        returnWindowDays: returnWindowDays,
+        returnDeadline: returnDeadline,
+      ),
     );
   }
 
@@ -590,6 +662,20 @@ class _GmailCandidate {
   final String date;
   final String snippet;
   final DateTime deliveredAt;
+}
+
+enum _UpsertOutcome { upserted, parseMiss }
+
+class _ParseCandidateOutcome {
+  const _ParseCandidateOutcome({
+    required this.reason,
+    required this.storeHint,
+    this.parsed,
+  });
+
+  final String reason;
+  final String storeHint;
+  final _ParsedDelivery? parsed;
 }
 
 class _ParsedDelivery {

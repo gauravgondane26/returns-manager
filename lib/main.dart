@@ -10,6 +10,7 @@ import 'package:google_sign_in/google_sign_in.dart';
 import 'package:table_calendar/table_calendar.dart';
 
 import 'calendar_export/calendar_export_providers.dart';
+import 'core/app_error_mapper.dart';
 import 'firebase_options.dart';
 import 'gmail/gmail_sync_service.dart';
 import 'items/application/items_providers.dart';
@@ -100,13 +101,12 @@ class _SignInPageState extends State<SignInPage> {
       );
 
       await FirebaseAuth.instance.signInWithCredential(credential);
-    } on FirebaseAuthException catch (error) {
-      setState(() {
-        _errorMessage = error.message ?? error.code;
-      });
     } catch (error) {
+      final mapped = mapToUserFacingError(error);
       setState(() {
-        _errorMessage = error.toString();
+        _errorMessage = mapped.actionHint == null
+            ? mapped.message
+            : '${mapped.message} ${mapped.actionHint}';
       });
     } finally {
       if (mounted) {
@@ -294,6 +294,11 @@ class _AppShellState extends ConsumerState<AppShell> {
     ).push(MaterialPageRoute<void>(builder: (_) => ItemEditorPage(item: item)));
   }
 
+  Future<void> _refreshItems() async {
+    ref.invalidate(currentUserItemsProvider);
+    await ref.read(currentUserItemsProvider.future);
+  }
+
   Future<void> _syncGmail() async {
     if (_isSyncingGmail) {
       return;
@@ -308,12 +313,21 @@ class _AppShellState extends ConsumerState<AppShell> {
       if (!mounted) {
         return;
       }
+      final parseMissLabel = result.parseMisses > 0
+          ? ', ${result.parseMisses} parse miss(es)'
+          : '';
+      final failedLabel = result.failedMessages > 0
+          ? ', ${result.failedMessages} failed message(s)'
+          : '';
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
             'Gmail sync done: ${result.upserts} upsert(s), '
             '${result.candidatesFound} candidate(s), '
-            '${result.fetchedMessages} fetched.',
+            '${result.fetchedMessages} fetched'
+            '$parseMissLabel'
+            '$failedLabel'
+            ' in ${result.elapsedMs}ms.',
           ),
         ),
       );
@@ -321,9 +335,16 @@ class _AppShellState extends ConsumerState<AppShell> {
       if (!mounted) {
         return;
       }
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Gmail sync failed: $error')));
+      final mapped = mapToUserFacingError(error);
+      final message = mapped.actionHint == null
+          ? mapped.message
+          : '${mapped.message} ${mapped.actionHint}';
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(message),
+          action: SnackBarAction(label: 'Retry', onPressed: _syncGmail),
+        ),
+      );
     } finally {
       if (mounted) {
         setState(() {
@@ -372,9 +393,15 @@ class _AppShellState extends ConsumerState<AppShell> {
             child: IndexedStack(
               index: _currentTabIndex,
               children: [
-                HomeTabView(onItemTap: _openEditItem),
-                CalendarTabView(onItemTap: _openEditItem),
-                DecidedTabView(onItemTap: _openEditItem),
+                HomeTabView(onItemTap: _openEditItem, onRetry: _refreshItems),
+                CalendarTabView(
+                  onItemTap: _openEditItem,
+                  onRetry: _refreshItems,
+                ),
+                DecidedTabView(
+                  onItemTap: _openEditItem,
+                  onRetry: _refreshItems,
+                ),
               ],
             ),
           ),
@@ -427,9 +454,14 @@ class _AppShellState extends ConsumerState<AppShell> {
 }
 
 class HomeTabView extends ConsumerWidget {
-  const HomeTabView({required this.onItemTap, super.key});
+  const HomeTabView({
+    required this.onItemTap,
+    required this.onRetry,
+    super.key,
+  });
 
   final ValueChanged<ReturnItem> onItemTap;
+  final Future<void> Function() onRetry;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -476,9 +508,11 @@ class HomeTabView extends ConsumerWidget {
         if (!context.mounted) {
           return false;
         }
-        ScaffoldMessenger.of(
+        _showFailureSnackBar(
           context,
-        ).showSnackBar(SnackBar(content: Text('Status update failed: $error')));
+          error: error,
+          fallbackPrefix: 'Status update failed',
+        );
         return false;
       }
 
@@ -508,14 +542,20 @@ class HomeTabView extends ConsumerWidget {
           handleSwipeStatus(item: item, targetStatus: ItemStatus.keep),
       onSwipeLeft: (item) =>
           handleSwipeStatus(item: item, targetStatus: ItemStatus.returnItem),
+      onRetry: onRetry,
     );
   }
 }
 
 class CalendarTabView extends ConsumerStatefulWidget {
-  const CalendarTabView({required this.onItemTap, super.key});
+  const CalendarTabView({
+    required this.onItemTap,
+    required this.onRetry,
+    super.key,
+  });
 
   final ValueChanged<ReturnItem> onItemTap;
+  final Future<void> Function() onRetry;
 
   @override
   ConsumerState<CalendarTabView> createState() => _CalendarTabViewState();
@@ -563,15 +603,10 @@ class _CalendarTabViewState extends ConsumerState<CalendarTabView> {
     return itemsAsync.when(
       loading: () => const Center(child: CircularProgressIndicator()),
       error: (error, stackTrace) {
-        return Center(
-          child: Padding(
-            padding: const EdgeInsets.all(24),
-            child: Text(
-              'Could not load calendar.\n$error',
-              textAlign: TextAlign.center,
-              style: TextStyle(color: Theme.of(context).colorScheme.error),
-            ),
-          ),
+        return AsyncErrorState(
+          message: 'Could not load calendar.',
+          error: error,
+          onRetry: widget.onRetry,
         );
       },
       data: (items) {
@@ -677,9 +712,14 @@ class _CalendarTabViewState extends ConsumerState<CalendarTabView> {
 }
 
 class DecidedTabView extends StatelessWidget {
-  const DecidedTabView({required this.onItemTap, super.key});
+  const DecidedTabView({
+    required this.onItemTap,
+    required this.onRetry,
+    super.key,
+  });
 
   final ValueChanged<ReturnItem> onItemTap;
+  final Future<void> Function() onRetry;
 
   @override
   Widget build(BuildContext context) {
@@ -697,9 +737,9 @@ class DecidedTabView extends StatelessWidget {
           Expanded(
             child: TabBarView(
               children: [
-                KeepsTabView(onItemTap: onItemTap),
-                ReturnsTabView(onItemTap: onItemTap),
-                ExpiredTabView(onItemTap: onItemTap),
+                KeepsTabView(onItemTap: onItemTap, onRetry: onRetry),
+                ReturnsTabView(onItemTap: onItemTap, onRetry: onRetry),
+                ExpiredTabView(onItemTap: onItemTap, onRetry: onRetry),
               ],
             ),
           ),
@@ -710,9 +750,14 @@ class DecidedTabView extends StatelessWidget {
 }
 
 class KeepsTabView extends ConsumerWidget {
-  const KeepsTabView({required this.onItemTap, super.key});
+  const KeepsTabView({
+    required this.onItemTap,
+    required this.onRetry,
+    super.key,
+  });
 
   final ValueChanged<ReturnItem> onItemTap;
+  final Future<void> Function() onRetry;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -723,14 +768,20 @@ class KeepsTabView extends ConsumerWidget {
       emptyTitle: 'No kept items',
       emptySubtitle: 'Items marked to keep will appear here.',
       onItemTap: onItemTap,
+      onRetry: onRetry,
     );
   }
 }
 
 class ReturnsTabView extends ConsumerWidget {
-  const ReturnsTabView({required this.onItemTap, super.key});
+  const ReturnsTabView({
+    required this.onItemTap,
+    required this.onRetry,
+    super.key,
+  });
 
   final ValueChanged<ReturnItem> onItemTap;
+  final Future<void> Function() onRetry;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -741,14 +792,20 @@ class ReturnsTabView extends ConsumerWidget {
       emptyTitle: 'No return items',
       emptySubtitle: 'Items marked for return will appear here.',
       onItemTap: onItemTap,
+      onRetry: onRetry,
     );
   }
 }
 
 class ExpiredTabView extends ConsumerWidget {
-  const ExpiredTabView({required this.onItemTap, super.key});
+  const ExpiredTabView({
+    required this.onItemTap,
+    required this.onRetry,
+    super.key,
+  });
 
   final ValueChanged<ReturnItem> onItemTap;
+  final Future<void> Function() onRetry;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -759,6 +816,7 @@ class ExpiredTabView extends ConsumerWidget {
       emptyTitle: 'No expired items',
       emptySubtitle: 'Expired return windows will appear here.',
       onItemTap: onItemTap,
+      onRetry: onRetry,
     );
   }
 }
@@ -773,6 +831,7 @@ class ItemsAsyncList extends StatelessWidget {
     this.onSwipeRight,
     this.onSwipeLeft,
     this.showDaysRemaining = false,
+    this.onRetry,
     super.key,
   });
 
@@ -784,90 +843,103 @@ class ItemsAsyncList extends StatelessWidget {
   final Future<bool> Function(ReturnItem item)? onSwipeRight;
   final Future<bool> Function(ReturnItem item)? onSwipeLeft;
   final bool showDaysRemaining;
+  final Future<void> Function()? onRetry;
 
   @override
   Widget build(BuildContext context) {
     return itemsAsync.when(
       loading: () => const Center(child: CircularProgressIndicator()),
       error: (error, stackTrace) {
-        return Center(
-          child: Padding(
-            padding: const EdgeInsets.all(24),
-            child: Text(
-              'Could not load items.\n$error',
-              textAlign: TextAlign.center,
-              style: TextStyle(color: Theme.of(context).colorScheme.error),
-            ),
-          ),
+        return AsyncErrorState(
+          message: 'Could not load items.',
+          error: error,
+          onRetry: onRetry,
         );
       },
       data: (items) {
+        final onRefresh = onRetry ?? () async {};
+
         if (items.isEmpty) {
-          return EmptyState(
-            icon: emptyIcon,
-            title: emptyTitle,
-            subtitle: emptySubtitle,
+          return RefreshIndicator(
+            onRefresh: onRefresh,
+            child: ListView(
+              physics: const AlwaysScrollableScrollPhysics(),
+              children: [
+                SizedBox(
+                  height: 420,
+                  child: EmptyState(
+                    icon: emptyIcon,
+                    title: emptyTitle,
+                    subtitle: emptySubtitle,
+                  ),
+                ),
+              ],
+            ),
           );
         }
 
-        return ListView.separated(
-          padding: const EdgeInsets.all(16),
-          itemCount: items.length,
-          itemBuilder: (context, index) {
-            final item = items[index];
-            final card = ItemCard(
-              item: item,
-              showDaysRemaining: showDaysRemaining,
-              onTap: () => onItemTap(item),
-            );
+        return RefreshIndicator(
+          onRefresh: onRefresh,
+          child: ListView.separated(
+            physics: const AlwaysScrollableScrollPhysics(),
+            padding: const EdgeInsets.all(16),
+            itemCount: items.length,
+            itemBuilder: (context, index) {
+              final item = items[index];
+              final card = ItemCard(
+                item: item,
+                showDaysRemaining: showDaysRemaining,
+                onTap: () => onItemTap(item),
+              );
 
-            final dismissDirection = _dismissDirection();
-            if (dismissDirection == DismissDirection.none) {
-              return card;
-            }
+              final dismissDirection = _dismissDirection();
+              if (dismissDirection == DismissDirection.none) {
+                return card;
+              }
 
-            return Dismissible(
-              key: ValueKey(
-                'item-${item.id}-${item.updatedAt.toIso8601String()}',
-              ),
-              direction: dismissDirection,
-              confirmDismiss: (direction) async {
-                if (direction == DismissDirection.startToEnd) {
-                  if (onSwipeRight == null) {
-                    return false;
+              return Dismissible(
+                key: ValueKey(
+                  'item-${item.id}-${item.updatedAt.toIso8601String()}',
+                ),
+                direction: dismissDirection,
+                confirmDismiss: (direction) async {
+                  if (direction == DismissDirection.startToEnd) {
+                    if (onSwipeRight == null) {
+                      return false;
+                    }
+                    return onSwipeRight!(item);
                   }
-                  return onSwipeRight!(item);
-                }
-                if (direction == DismissDirection.endToStart) {
-                  if (onSwipeLeft == null) {
-                    return false;
+                  if (direction == DismissDirection.endToStart) {
+                    if (onSwipeLeft == null) {
+                      return false;
+                    }
+                    return onSwipeLeft!(item);
                   }
-                  return onSwipeLeft!(item);
-                }
-                return false;
-              },
-              onDismissed: (_) {
-                if (!context.mounted) {
-                  return;
-                }
-                ScaffoldMessenger.of(context).hideCurrentSnackBar();
-              },
-              background: const _SwipeBackground(
-                label: 'Keep',
-                icon: Icons.favorite,
-                alignStart: true,
-                color: Colors.green,
-              ),
-              secondaryBackground: const _SwipeBackground(
-                label: 'Return',
-                icon: Icons.assignment_return,
-                alignStart: false,
-                color: Colors.orange,
-              ),
-              child: card,
-            );
-          },
-          separatorBuilder: (context, index) => const SizedBox(height: 10),
+                  return false;
+                },
+                onDismissed: (_) {
+                  if (!context.mounted) {
+                    return;
+                  }
+                  ScaffoldMessenger.of(context).hideCurrentSnackBar();
+                },
+                background: const _SwipeBackground(
+                  label: 'Keep',
+                  icon: Icons.favorite,
+                  alignStart: true,
+                  color: Colors.green,
+                ),
+                secondaryBackground: const _SwipeBackground(
+                  label: 'Return',
+                  icon: Icons.assignment_return,
+                  alignStart: false,
+                  color: Colors.orange,
+                ),
+                child: card,
+              );
+            },
+            separatorBuilder: (context, index) => const SizedBox(height: 10),
+          ),
         );
       },
     );
@@ -887,6 +959,83 @@ class ItemsAsyncList extends StatelessWidget {
     }
     return DismissDirection.none;
   }
+}
+
+class AsyncErrorState extends StatelessWidget {
+  const AsyncErrorState({
+    required this.message,
+    required this.error,
+    this.onRetry,
+    super.key,
+  });
+
+  final String message;
+  final Object error;
+  final Future<void> Function()? onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    final mapped = mapToUserFacingError(error);
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              Icons.error_outline,
+              size: 34,
+              color: Theme.of(context).colorScheme.error,
+            ),
+            const SizedBox(height: 10),
+            Text(
+              message,
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              mapped.message,
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
+            ),
+            if (mapped.actionHint != null) ...[
+              const SizedBox(height: 6),
+              Text(
+                mapped.actionHint!,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ],
+            if (onRetry != null) ...[
+              const SizedBox(height: 14),
+              FilledButton.icon(
+                onPressed: () => unawaited(onRetry!()),
+                icon: const Icon(Icons.refresh),
+                label: const Text('Retry'),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+void _showFailureSnackBar(
+  BuildContext context, {
+  required Object error,
+  required String fallbackPrefix,
+}) {
+  final mapped = mapToUserFacingError(error);
+  final hintText = mapped.actionHint == null ? '' : ' ${mapped.actionHint}';
+  ScaffoldMessenger.of(context).showSnackBar(
+    SnackBar(content: Text('$fallbackPrefix. ${mapped.message}$hintText')),
+  );
 }
 
 class _SwipeBackground extends StatelessWidget {
@@ -1197,9 +1346,11 @@ class _ItemEditorPageState extends ConsumerState<ItemEditorPage> {
       if (!mounted) {
         return;
       }
-      ScaffoldMessenger.of(
+      _showFailureSnackBar(
         context,
-      ).showSnackBar(SnackBar(content: Text('Save failed: $error')));
+        error: error,
+        fallbackPrefix: 'Save failed',
+      );
     } finally {
       if (mounted) {
         setState(() {
@@ -1254,9 +1405,11 @@ class _ItemEditorPageState extends ConsumerState<ItemEditorPage> {
       if (!mounted) {
         return;
       }
-      ScaffoldMessenger.of(
+      _showFailureSnackBar(
         context,
-      ).showSnackBar(SnackBar(content: Text('Delete failed: $error')));
+        error: error,
+        fallbackPrefix: 'Delete failed',
+      );
     } finally {
       if (mounted) {
         setState(() {
