@@ -1,12 +1,15 @@
 import 'dart:async';
 
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:table_calendar/table_calendar.dart';
 
+import 'calendar_export/calendar_export_providers.dart';
 import 'firebase_options.dart';
 import 'gmail/gmail_sync_service.dart';
 import 'items/application/items_providers.dart';
@@ -18,6 +21,12 @@ import 'reminders/reminder_providers.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+  if (!kIsWeb) {
+    FirebaseFirestore.instance.settings = const Settings(
+      persistenceEnabled: true,
+      cacheSizeBytes: Settings.CACHE_SIZE_UNLIMITED,
+    );
+  }
   runApp(const ProviderScope(child: ReturnsManagerApp()));
 }
 
@@ -164,6 +173,7 @@ class _AppShellState extends ConsumerState<AppShell> {
   int _currentTabIndex = 0;
   bool _isSyncingGmail = false;
   bool _isReminderSyncEnabled = false;
+  bool _isCalendarExportEnabled = false;
   Set<String> _trackedReminderItemIds = <String>{};
 
   @override
@@ -172,6 +182,7 @@ class _AppShellState extends ConsumerState<AppShell> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _applyDeadlineTransitions();
       unawaited(_initializeReminderScheduler());
+      unawaited(_initializeCalendarExport());
     });
   }
 
@@ -188,11 +199,17 @@ class _AppShellState extends ConsumerState<AppShell> {
   }
 
   Future<void> _signOut() async {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
     final scheduler = ref.read(reminderSchedulerProvider);
     for (final itemId in _trackedReminderItemIds) {
       await scheduler.cancelForItem(itemId);
     }
     _trackedReminderItemIds = <String>{};
+
+    if (uid != null) {
+      final calendarExport = ref.read(calendarExportServiceProvider);
+      await calendarExport.clearExportedEvents(uid: uid);
+    }
 
     await GoogleSignIn().signOut();
     await FirebaseAuth.instance.signOut();
@@ -231,6 +248,38 @@ class _AppShellState extends ConsumerState<AppShell> {
 
     await scheduler.syncForItems(items);
     _trackedReminderItemIds = currentIds;
+  }
+
+  Future<void> _initializeCalendarExport() async {
+    try {
+      final exportService = ref.read(calendarExportServiceProvider);
+      await exportService.initialize();
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _isCalendarExportEnabled = true;
+      });
+
+      final itemsState = ref.read(currentUserItemsProvider);
+      itemsState.whenData((items) {
+        unawaited(_syncCalendarExportFromItems(items));
+      });
+    } catch (_) {}
+  }
+
+  Future<void> _syncCalendarExportFromItems(List<ReturnItem> items) async {
+    if (!_isCalendarExportEnabled) {
+      return;
+    }
+
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) {
+      return;
+    }
+
+    final exportService = ref.read(calendarExportServiceProvider);
+    await exportService.syncPendingItems(uid: uid, items: items);
   }
 
   Future<void> _openCreateItem() async {
@@ -292,6 +341,7 @@ class _AppShellState extends ConsumerState<AppShell> {
     ) {
       next.whenData((items) {
         unawaited(_syncRemindersFromItems(items));
+        unawaited(_syncCalendarExportFromItems(items));
       });
     });
 
