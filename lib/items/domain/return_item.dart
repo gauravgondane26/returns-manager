@@ -1,3 +1,4 @@
+import 'deadline_engine.dart';
 import 'item_enums.dart';
 
 class ReturnItem {
@@ -35,6 +36,13 @@ class ReturnItem {
   final List<String> messageIds;
   final String? notes;
 
+  ItemStatus get effectiveStatus {
+    return DeadlineEngine.resolveStatus(
+      status: status,
+      returnDeadline: returnDeadline,
+    );
+  }
+
   ReturnItem copyWith({
     String? id,
     String? uid,
@@ -71,17 +79,14 @@ class ReturnItem {
     );
   }
 
-  bool get isInReturnPeriod =>
-      status == ItemStatus.pending && daysRemaining >= 0;
+  bool get isInReturnPeriod {
+    return DeadlineEngine.isInReturnPeriod(
+      status: status,
+      returnDeadline: returnDeadline,
+    );
+  }
 
   int get daysRemaining {
-    final now = DateTime.now();
-    final today = DateTime(now.year, now.month, now.day);
-    final deadlineDay = DateTime(
-      returnDeadline.year,
-      returnDeadline.month,
-      returnDeadline.day,
-    );
-    return deadlineDay.difference(today).inDays;
+    return DeadlineEngine.daysRemaining(returnDeadline: returnDeadline);
   }
 }

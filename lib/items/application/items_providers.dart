@@ -55,26 +55,22 @@ final calendarItemsProvider = Provider<AsyncValue<List<ReturnItem>>>((ref) {
 final keepsItemsProvider = Provider<AsyncValue<List<ReturnItem>>>((ref) {
   final itemsAsync = ref.watch(currentUserItemsProvider);
   return itemsAsync.whenData((items) {
-    return items.where((item) => item.status == ItemStatus.keep).toList();
+    return items.where((item) => item.effectiveStatus == ItemStatus.keep).toList();
   });
 });
 
 final returnsItemsProvider = Provider<AsyncValue<List<ReturnItem>>>((ref) {
   final itemsAsync = ref.watch(currentUserItemsProvider);
   return itemsAsync.whenData((items) {
-    return items.where((item) => item.status == ItemStatus.returnItem).toList();
+    return items
+        .where((item) => item.effectiveStatus == ItemStatus.returnItem)
+        .toList();
   });
 });
 
 final expiredItemsProvider = Provider<AsyncValue<List<ReturnItem>>>((ref) {
   final itemsAsync = ref.watch(currentUserItemsProvider);
   return itemsAsync.whenData((items) {
-    return items
-        .where(
-          (item) =>
-              item.status == ItemStatus.expired ||
-              (item.status == ItemStatus.pending && !item.isInReturnPeriod),
-        )
-        .toList();
+    return items.where((item) => item.effectiveStatus == ItemStatus.expired).toList();
   });
 });

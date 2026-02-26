@@ -30,6 +30,11 @@ class MockItemsRepository implements ItemsRepository {
     required String itemId,
   }) async {}
 
+  @override
+  Future<int> expireOverduePendingItems({required String uid}) async {
+    return 0;
+  }
+
   List<ReturnItem> _seedItems({required String uid}) {
     final now = DateTime.now();
 

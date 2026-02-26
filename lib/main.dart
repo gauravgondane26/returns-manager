@@ -8,6 +8,7 @@ import 'package:table_calendar/table_calendar.dart';
 import 'firebase_options.dart';
 import 'gmail/gmail_sync_service.dart';
 import 'items/application/items_providers.dart';
+import 'items/domain/deadline_engine.dart';
 import 'items/domain/item_enums.dart';
 import 'items/domain/return_item.dart';
 
@@ -149,16 +150,36 @@ class _SignInPageState extends State<SignInPage> {
   }
 }
 
-class AppShell extends StatefulWidget {
+class AppShell extends ConsumerStatefulWidget {
   const AppShell({super.key});
 
   @override
-  State<AppShell> createState() => _AppShellState();
+  ConsumerState<AppShell> createState() => _AppShellState();
 }
 
-class _AppShellState extends State<AppShell> {
+class _AppShellState extends ConsumerState<AppShell> {
   int _currentTabIndex = 0;
   bool _isSyncingGmail = false;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _applyDeadlineTransitions();
+    });
+  }
+
+  Future<void> _applyDeadlineTransitions() async {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) {
+      return;
+    }
+
+    final repository = ref.read(itemsRepositoryProvider);
+    try {
+      await repository.expireOverduePendingItems(uid: uid);
+    } catch (_) {}
+  }
 
   Future<void> _signOut() async {
     await GoogleSignIn().signOut();
@@ -831,7 +852,7 @@ class ItemCard extends StatelessWidget {
           ),
         ),
         title: Text(item.title),
-        subtitle: Text('${item.store.label} - ${item.status.label}'),
+        subtitle: Text('${item.store.label} - ${item.effectiveStatus.label}'),
         trailing: showDaysRemaining ? Text(daysLabel) : null,
         onTap: onTap,
       ),
@@ -869,6 +890,7 @@ class _ItemEditorPageState extends ConsumerState<ItemEditorPage> {
   late ItemStatus _status;
   late DateTime _deliveredAt;
   late DateTime _returnDeadline;
+  bool _isDeadlineManuallyEdited = false;
 
   bool _isSaving = false;
   bool _isDeleting = false;
@@ -894,30 +916,24 @@ class _ItemEditorPageState extends ConsumerState<ItemEditorPage> {
     final item = widget.item;
     final now = DateTime.now();
     _store = item?.store ?? StoreType.other;
-    _status = item?.status ?? ItemStatus.pending;
+    _status = item?.effectiveStatus ?? ItemStatus.pending;
     final initialDelivered = item?.deliveredAt ?? now;
-    _deliveredAt = DateTime(
-      initialDelivered.year,
-      initialDelivered.month,
-      initialDelivered.day,
+    _deliveredAt = DeadlineEngine.atStartOfDay(initialDelivered);
+
+    final initialWindowDays = item == null
+        ? DeadlineEngine.defaultWindowForStore(_store)
+        : DeadlineEngine.calculateReturnWindowDays(
+            deliveredAt: _deliveredAt,
+            returnDeadline: item.returnDeadline,
+          );
+    _returnDeadline = DeadlineEngine.calculateReturnDeadline(
+      deliveredAt: _deliveredAt,
+      returnWindowDays: initialWindowDays,
     );
-    final initialDeadline =
-        item?.returnDeadline ?? now.add(const Duration(days: 30));
-    final normalizedDeadline = DateTime(
-      initialDeadline.year,
-      initialDeadline.month,
-      initialDeadline.day,
-    );
-    final maxDeadline = _maxDeadlineForDelivered(_deliveredAt);
-    if (normalizedDeadline.isBefore(_deliveredAt)) {
-      _returnDeadline = _deliveredAt;
-    } else if (normalizedDeadline.isAfter(maxDeadline)) {
-      _returnDeadline = maxDeadline;
-    } else {
-      _returnDeadline = normalizedDeadline;
-    }
+
     _titleController.text = item?.title ?? '';
     _notesController.text = item?.notes ?? '';
+    _isDeadlineManuallyEdited = item != null;
   }
 
   @override
@@ -935,35 +951,36 @@ class _ItemEditorPageState extends ConsumerState<ItemEditorPage> {
     required DateTime deliveredAt,
     required DateTime returnDeadline,
   }) {
-    final delivered = DateTime(
-      deliveredAt.year,
-      deliveredAt.month,
-      deliveredAt.day,
+    return DeadlineEngine.calculateReturnWindowDays(
+      deliveredAt: deliveredAt,
+      returnDeadline: returnDeadline,
     );
-    final deadline = DateTime(
-      returnDeadline.year,
-      returnDeadline.month,
-      returnDeadline.day,
-    );
-    final days = deadline.difference(delivered).inDays + 1;
-    if (days < 1) {
-      return 1;
-    }
-    if (days > 120) {
-      return 120;
-    }
-    return days;
   }
 
   DateTime _maxDeadlineForDelivered(DateTime deliveredAt) {
-    return DateTime(
-      deliveredAt.year,
-      deliveredAt.month,
-      deliveredAt.day,
-    ).add(const Duration(days: 119));
+    return DeadlineEngine.calculateReturnDeadline(
+      deliveredAt: deliveredAt,
+      returnWindowDays: DeadlineEngine.maxReturnWindowDays,
+    );
+  }
+
+  DateTime _defaultDeadlineForStore({
+    required StoreType store,
+    required DateTime deliveredAt,
+  }) {
+    return DeadlineEngine.calculateReturnDeadline(
+      deliveredAt: deliveredAt,
+      returnWindowDays: DeadlineEngine.defaultWindowForStore(store),
+    );
   }
 
   Future<void> _pickDeliveredDate() async {
+    final previousDelivered = _deliveredAt;
+    final currentWindowDays = _calculateReturnWindowDays(
+      deliveredAt: previousDelivered,
+      returnDeadline: _returnDeadline,
+    );
+
     final picked = await showDatePicker(
       context: context,
       initialDate: _deliveredAt,
@@ -975,13 +992,17 @@ class _ItemEditorPageState extends ConsumerState<ItemEditorPage> {
     }
 
     setState(() {
-      _deliveredAt = DateTime(picked.year, picked.month, picked.day);
-      if (_returnDeadline.isBefore(_deliveredAt)) {
-        _returnDeadline = _deliveredAt;
-      }
-      final maxDeadline = _maxDeadlineForDelivered(_deliveredAt);
-      if (_returnDeadline.isAfter(maxDeadline)) {
-        _returnDeadline = maxDeadline;
+      _deliveredAt = DeadlineEngine.atStartOfDay(picked);
+      if (_isDeadlineManuallyEdited) {
+        _returnDeadline = DeadlineEngine.calculateReturnDeadline(
+          deliveredAt: _deliveredAt,
+          returnWindowDays: currentWindowDays,
+        );
+      } else {
+        _returnDeadline = _defaultDeadlineForStore(
+          store: _store,
+          deliveredAt: _deliveredAt,
+        );
       }
     });
   }
@@ -998,7 +1019,8 @@ class _ItemEditorPageState extends ConsumerState<ItemEditorPage> {
     }
 
     setState(() {
-      _returnDeadline = DateTime(picked.year, picked.month, picked.day);
+      _returnDeadline = DeadlineEngine.atStartOfDay(picked);
+      _isDeadlineManuallyEdited = true;
     });
   }
 
@@ -1022,6 +1044,10 @@ class _ItemEditorPageState extends ConsumerState<ItemEditorPage> {
     final notes = _notesController.text.trim().isEmpty
         ? null
         : _notesController.text.trim();
+    final statusForWrite = DeadlineEngine.resolveStatus(
+      status: _status,
+      returnDeadline: _returnDeadline,
+    );
     final repository = ref.read(itemsRepositoryProvider);
 
     setState(() {
@@ -1034,7 +1060,7 @@ class _ItemEditorPageState extends ConsumerState<ItemEditorPage> {
           uid: uid,
           title: title,
           store: _store,
-          status: _status,
+          status: statusForWrite,
           deliveredAt: _deliveredAt,
           returnDeadline: _returnDeadline,
           notes: notes,
@@ -1044,7 +1070,7 @@ class _ItemEditorPageState extends ConsumerState<ItemEditorPage> {
         final updated = widget.item!.copyWith(
           title: title,
           store: _store,
-          status: _status,
+          status: statusForWrite,
           deliveredAt: _deliveredAt,
           returnDeadline: _returnDeadline,
           returnWindowDays: _calculateReturnWindowDays(
@@ -1191,6 +1217,13 @@ class _ItemEditorPageState extends ConsumerState<ItemEditorPage> {
                         if (value != null) {
                           setState(() {
                             _store = value;
+                            if (widget.item == null &&
+                                !_isDeadlineManuallyEdited) {
+                              _returnDeadline = _defaultDeadlineForStore(
+                                store: _store,
+                                deliveredAt: _deliveredAt,
+                              );
+                            }
                           });
                         }
                       },

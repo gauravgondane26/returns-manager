@@ -17,4 +17,6 @@ abstract class ItemsRepository {
   Future<void> updateItem(ReturnItem item);
 
   Future<void> deleteItem({required String uid, required String itemId});
+
+  Future<int> expireOverduePendingItems({required String uid});
 }

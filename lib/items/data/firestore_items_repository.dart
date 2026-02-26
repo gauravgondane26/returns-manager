@@ -1,6 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 import '../../contracts/firestore_contract.dart' as contract;
+import '../domain/deadline_engine.dart';
 import '../domain/item_enums.dart';
 import '../domain/return_item.dart';
 import 'items_repository.dart';
@@ -76,28 +77,50 @@ class FirestoreItemsRepository implements ItemsRepository {
     await _itemsCollection(uid: uid).doc(itemId).delete();
   }
 
+  @override
+  Future<int> expireOverduePendingItems({required String uid}) async {
+    final now = DateTime.now();
+    final pendingSnapshot = await _itemsCollection(
+      uid: uid,
+    ).where(contract.ItemFields.status, isEqualTo: contract.ItemStatus.pending).get();
+
+    final batch = _firestore.batch();
+    var expiredCount = 0;
+    for (final doc in pendingSnapshot.docs) {
+      final data = doc.data();
+      final deadline = _timestampToDate(data[contract.ItemFields.returnDeadline]);
+      final shouldExpire =
+          DeadlineEngine.resolveStatus(
+            status: ItemStatus.pending,
+            returnDeadline: deadline,
+            now: now,
+          ) ==
+          ItemStatus.expired;
+      if (!shouldExpire) {
+        continue;
+      }
+
+      batch.update(doc.reference, {
+        contract.ItemFields.status: contract.ItemStatus.expired,
+        contract.ItemFields.updatedAt: Timestamp.fromDate(now),
+      });
+      expiredCount += 1;
+    }
+
+    if (expiredCount > 0) {
+      await batch.commit();
+    }
+    return expiredCount;
+  }
+
   int _returnWindowDays({
     required DateTime deliveredAt,
     required DateTime returnDeadline,
   }) {
-    final deliveredDate = DateTime(
-      deliveredAt.year,
-      deliveredAt.month,
-      deliveredAt.day,
+    return DeadlineEngine.calculateReturnWindowDays(
+      deliveredAt: deliveredAt,
+      returnDeadline: returnDeadline,
     );
-    final deadlineDate = DateTime(
-      returnDeadline.year,
-      returnDeadline.month,
-      returnDeadline.day,
-    );
-    final days = deadlineDate.difference(deliveredDate).inDays + 1;
-    if (days < 1) {
-      return 1;
-    }
-    if (days > 120) {
-      return 120;
-    }
-    return days;
   }
 
   ReturnItem _itemFromDocument({
