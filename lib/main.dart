@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
@@ -11,6 +13,7 @@ import 'items/application/items_providers.dart';
 import 'items/domain/deadline_engine.dart';
 import 'items/domain/item_enums.dart';
 import 'items/domain/return_item.dart';
+import 'reminders/reminder_providers.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -160,12 +163,15 @@ class AppShell extends ConsumerStatefulWidget {
 class _AppShellState extends ConsumerState<AppShell> {
   int _currentTabIndex = 0;
   bool _isSyncingGmail = false;
+  bool _isReminderSyncEnabled = false;
+  Set<String> _trackedReminderItemIds = <String>{};
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _applyDeadlineTransitions();
+      unawaited(_initializeReminderScheduler());
     });
   }
 
@@ -182,8 +188,49 @@ class _AppShellState extends ConsumerState<AppShell> {
   }
 
   Future<void> _signOut() async {
+    final scheduler = ref.read(reminderSchedulerProvider);
+    for (final itemId in _trackedReminderItemIds) {
+      await scheduler.cancelForItem(itemId);
+    }
+    _trackedReminderItemIds = <String>{};
+
     await GoogleSignIn().signOut();
     await FirebaseAuth.instance.signOut();
+  }
+
+  Future<void> _initializeReminderScheduler() async {
+    try {
+      final scheduler = ref.read(reminderSchedulerProvider);
+      await scheduler.initialize();
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _isReminderSyncEnabled = true;
+      });
+
+      final itemsState = ref.read(currentUserItemsProvider);
+      itemsState.whenData((items) {
+        unawaited(_syncRemindersFromItems(items));
+      });
+    } catch (_) {}
+  }
+
+  Future<void> _syncRemindersFromItems(List<ReturnItem> items) async {
+    if (!_isReminderSyncEnabled) {
+      return;
+    }
+
+    final scheduler = ref.read(reminderSchedulerProvider);
+    final currentIds = items.map((item) => item.id).toSet();
+    final removedIds = _trackedReminderItemIds.difference(currentIds);
+    for (final removedId in removedIds) {
+      await scheduler.cancelForItem(removedId);
+    }
+
+    await scheduler.syncForItems(items);
+    _trackedReminderItemIds = currentIds;
   }
 
   Future<void> _openCreateItem() async {
@@ -239,6 +286,15 @@ class _AppShellState extends ConsumerState<AppShell> {
 
   @override
   Widget build(BuildContext context) {
+    ref.listen<AsyncValue<List<ReturnItem>>>(currentUserItemsProvider, (
+      _,
+      next,
+    ) {
+      next.whenData((items) {
+        unawaited(_syncRemindersFromItems(items));
+      });
+    });
+
     final tabTitles = ['Home', 'Calendar', 'Decided'];
     final user = FirebaseAuth.instance.currentUser;
 
