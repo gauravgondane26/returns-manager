@@ -1,0 +1,14 @@
+{
+  "subject": "Your Amazon.com order 123-1234567-1234567 was delivered",
+  "from": "Amazon <shipment-tracking@amazon.com>",
+  "snippet": "Package was delivered.",
+  "deliveredAt": "2026-02-24T12:00:00",
+  "expected": {
+    "store": "amazon",
+    "orderId": "123-1234567-1234567",
+    "title": "Amazon order 123-1234567-1234567",
+    "normalizedTitle": "amazon order 123 1234567 1234567",
+    "returnWindowDays": 30,
+    "returnDeadlineDate": "2026-03-25"
+  }
+}

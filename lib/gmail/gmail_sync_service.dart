@@ -4,6 +4,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:http/http.dart' as http;
+import 'package:meta/meta.dart';
 
 import '../contracts/firestore_contract.dart' as contract;
 import '../items/domain/deadline_engine.dart';
@@ -271,6 +272,91 @@ class GmailSyncService {
     return true;
   }
 
+  @visibleForTesting
+  Future<bool> upsertCandidateForTest({
+    required String uid,
+    required String messageId,
+    required String subject,
+    required String from,
+    required String snippet,
+    required DateTime deliveredAt,
+  }) {
+    return _upsertCandidate(
+      uid: uid,
+      candidate: _GmailCandidate(
+        messageId: messageId,
+        subject: subject,
+        from: from,
+        date: '',
+        snippet: snippet,
+        deliveredAt: deliveredAt,
+      ),
+    );
+  }
+
+  @visibleForTesting
+  Map<String, dynamic>? parseCandidateForTest({
+    required String subject,
+    required String from,
+    required String snippet,
+    required DateTime deliveredAt,
+  }) {
+    final parsed = _parseDeliveryCandidate(
+      _GmailCandidate(
+        messageId: 'test-message',
+        subject: subject,
+        from: from,
+        date: '',
+        snippet: snippet,
+        deliveredAt: deliveredAt,
+      ),
+    );
+    if (parsed == null) {
+      return null;
+    }
+    return <String, dynamic>{
+      'store': parsed.store,
+      'orderId': parsed.orderId,
+      'title': parsed.title,
+      'normalizedTitle': parsed.normalizedTitle,
+      'deliveredAtDay': parsed.deliveredAtDay,
+      'returnWindowDays': parsed.returnWindowDays,
+      'returnDeadline': parsed.returnDeadline,
+    };
+  }
+
+  @visibleForTesting
+  String dedupeDocIdForTest({
+    required String uid,
+    required String store,
+    String? orderId,
+    required String normalizedTitle,
+  }) {
+    return _dedupeDocId(
+      uid: uid,
+      parsed: _ParsedDelivery(
+        store: store,
+        orderId: orderId,
+        title: 'test',
+        normalizedTitle: normalizedTitle,
+        deliveredAtDay: DateTime(2026, 1, 1),
+        returnWindowDays: DeadlineEngine.defaultWindowDays,
+        returnDeadline: DateTime(2026, 1, 30),
+      ),
+    );
+  }
+
+  @visibleForTesting
+  List<String> mergeMessageIdsForTest({
+    required List<dynamic> existing,
+    required String incomingMessageId,
+  }) {
+    return _mergeMessageIds(
+      existing: existing,
+      incomingMessageId: incomingMessageId,
+    );
+  }
+
   _ParsedDelivery? _parseDeliveryCandidate(_GmailCandidate candidate) {
     final store = _inferStore(
       from: candidate.from,
@@ -482,7 +568,7 @@ class GmailSyncService {
     caseSensitive: false,
   );
   static final RegExp _brandNoiseRegex = RegExp(
-    r'\b(amazon|amazon\.com|shein)\b',
+    r'\b(amazon\.com|amazon|shein)\b',
     caseSensitive: false,
   );
   static final RegExp _punctuationNoiseRegex = RegExp(r'[\|\-:_\[\]\(\),]+');

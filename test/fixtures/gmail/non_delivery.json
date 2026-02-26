@@ -1,0 +1,6 @@
+{
+  "subject": "Amazon order 123-1234567-1234567 has shipped",
+  "from": "Amazon <shipment-tracking@amazon.com>",
+  "snippet": "Your order is on the way.",
+  "deliveredAt": "2026-02-24T10:00:00"
+}

@@ -1,0 +1,14 @@
+{
+  "subject": "SHEIN order SHN123456 was delivered",
+  "from": "SHEIN <notice@shein.com>",
+  "snippet": "Delivery confirmation for your package.",
+  "deliveredAt": "2026-02-24T09:30:00",
+  "expected": {
+    "store": "shein",
+    "orderId": "SHN123456",
+    "title": "SHEIN order SHN123456",
+    "normalizedTitle": "shein order shn123456",
+    "returnWindowDays": 35,
+    "returnDeadlineDate": "2026-03-30"
+  }
+}
